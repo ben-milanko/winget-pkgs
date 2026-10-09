@@ -24,12 +24,11 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $client = Get-Command winget.exe -ErrorAction SilentlyContinue
-          $currentVersion = if ($client) { (& $client.Source --version).Trim().TrimStart('v') } else { '0.0.0' }
-          if ([version]$currentVersion -lt [version]'1.12.0') {
+          if (-not $client) {
             Install-PackageProvider -Name NuGet -Force | Out-Null
             Install-Module -Name Microsoft.WinGet.Client -Force -Repository PSGallery -Scope CurrentUser | Out-Null
             Import-Module Microsoft.WinGet.Client
-            Repair-WinGetPackageManager -Latest -AllUsers
+            Repair-WinGetPackageManager -AllUsers
             $client = Get-Command winget.exe -ErrorAction SilentlyContinue
           }
           if (-not $client) { throw 'WinGet is not available after bootstrap' }
@@ -37,7 +36,7 @@ jobs:
           & $client.Source --version
           if ($LASTEXITCODE -ne 0) { throw "WinGet version check failed ($LASTEXITCODE)" }
           $verifiedVersion = (& $client.Source --version).Trim().TrimStart('v')
-          if ([version]$verifiedVersion -lt [version]'1.12.0') { throw "WinGet client remains too old: $verifiedVersion" }
+          if ([version]$verifiedVersion -lt [version]'1.10.0') { throw "WinGet client remains too old: $verifiedVersion" }
 
       - name: Validate the three-file manifest with WinGet
         run: |
