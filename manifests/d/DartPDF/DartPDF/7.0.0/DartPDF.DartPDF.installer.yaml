@@ -1,0 +1,24 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json
+PackageIdentifier: DartPDF.DartPDF
+PackageVersion: 7.0.0
+InstallerLocale: en-US
+InstallerType: nullsoft
+Scope: user
+InstallModes:
+  - interactive
+  - silent
+  - silentWithProgress
+InstallerSwitches:
+  Silent: /S
+  SilentWithProgress: /S
+UpgradeBehavior: install
+FileExtensions:
+  - pdf
+ProductCode: DartPDF
+ReleaseDate: '2026-10-05'
+Installers:
+  - Architecture: x64
+    InstallerUrl: https://github.com/ben-milanko/dart-pdf/releases/download/app-v7.0.0/dartpdf-windows-installer.exe
+    InstallerSha256: 44D1D4BB5809158EF0DA20191E8A7A78FB6A0EECE179E3679E760ED122A71617
+ManifestType: installer
+ManifestVersion: 1.12.0
