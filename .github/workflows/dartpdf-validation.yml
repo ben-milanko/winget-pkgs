@@ -56,12 +56,53 @@ jobs:
           if ($actual -ne $expected) { throw "Installer SHA256 mismatch: $actual" }
           "Official installer SHA256: $actual"
 
-      - name: Install the local manifest without accepting source or package agreements
+      - name: Install the local manifest with bounded diagnostics
         run: |
+          $ErrorActionPreference = 'Stop'
           & $env:DARTPDF_WINGET_EXE settings --enable LocalManifestFiles
           if ($LASTEXITCODE -ne 0) { throw "Local manifest setting failed ($LASTEXITCODE)" }
-          & $env:DARTPDF_WINGET_EXE install --manifest manifests/d/DartPDF/DartPDF/7.0.0 --silent --disable-interactivity
-          if ($LASTEXITCODE -ne 0) { throw "Manifest installation failed ($LASTEXITCODE)" }
+          $manifestPath = (Resolve-Path 'manifests/d/DartPDF/DartPDF/7.0.0').Path
+          $stdoutPath = Join-Path $env:RUNNER_TEMP 'dartpdf-winget-stdout.txt'
+          $stderrPath = Join-Path $env:RUNNER_TEMP 'dartpdf-winget-stderr.txt'
+          $installArgs = @('install', '--manifest', "`"$manifestPath`"", '--silent', '--disable-interactivity', '--verbose-logs')
+          $installProcess = Start-Process $env:DARTPDF_WINGET_EXE -ArgumentList $installArgs -PassThru -NoNewWindow -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+          $completed = $installProcess.WaitForExit(240000)
+          $installProcess.Refresh()
+          foreach ($logPath in @($stdoutPath, $stderrPath)) {
+            if (Test-Path -LiteralPath $logPath) {
+              "Captured $([IO.Path]::GetFileName($logPath))"
+              Get-Content -LiteralPath $logPath | Where-Object { $_ -match '[A-Za-z]{3}' -and $_ -notmatch 'Authorization|Bearer|Cookie|https?://\S*\?' } | Select-Object -Last 40
+            }
+          }
+          if (-not $completed) {
+            'WinGet exceeded the four-minute installation bound. Capturing scoped processes before ending only its disposable VM process tree.'
+            Get-CimInstance Win32_Process | Where-Object { $_.Name -match '(?i)winget|dartpdf|appinstaller' } | Select-Object Name, ProcessId, ParentProcessId, ExecutablePath, CommandLine | Format-List
+            Get-Process | Where-Object { $_.ProcessName -match '(?i)winget|dartpdf|appinstaller' } | Select-Object ProcessName, Id, Responding, MainWindowTitle | Format-Table -AutoSize
+            & taskkill.exe /PID $installProcess.Id /T /F
+            throw 'WinGet install did not complete within four minutes; behavior gate failed'
+          }
+          if ($installProcess.ExitCode -ne 0) { throw "Manifest installation failed ($($installProcess.ExitCode))" }
+
+      - name: Read installation diagnostics without changing security or agreements
+        if: always()
+        run: |
+          & $env:DARTPDF_WINGET_EXE --info
+          $diagDir = Join-Path $env:LOCALAPPDATA 'Packages\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe\LocalState\DiagOutputDir'
+          if (Test-Path -LiteralPath $diagDir) {
+            $logs = Get-ChildItem -LiteralPath $diagDir -Filter 'WinGet-*.log' -File | Sort-Object LastWriteTime -Descending | Select-Object -First 2
+            foreach ($log in $logs) {
+              "Diagnostic log: $($log.Name)"
+              Get-Content -LiteralPath $log.FullName | Where-Object { $_ -match 'Installer|install|Executing|Execute|ShellExecute|Waiting|Error|Exception|Failed|Cancelled' -and $_ -notmatch 'https?://|Authorization|Bearer|Cookie|Token|headers' } | Select-Object -Last 80
+            }
+          }
+          $arpPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\DartPDF'
+          if (Test-Path $arpPath) {
+            Get-ItemProperty $arpPath | Select-Object DisplayName, DisplayVersion, Publisher, InstallLocation | Format-List
+          } else { 'No DartPDF ARP entry exists in the runner account' }
+          $installed = Join-Path $env:LOCALAPPDATA 'Programs\DartPDF'
+          if (Test-Path -LiteralPath $installed) {
+            Get-ChildItem -LiteralPath $installed -File | Select-Object Name, Length | Format-Table -AutoSize
+          } else { 'No DartPDF program folder exists in the runner account' }
 
       - name: Verify installed metadata and launch the empty app
         run: |
