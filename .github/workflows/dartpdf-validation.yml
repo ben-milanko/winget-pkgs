@@ -60,7 +60,7 @@ jobs:
         run: |
           & $env:DARTPDF_WINGET_EXE settings --enable LocalManifestFiles
           if ($LASTEXITCODE -ne 0) { throw "Local manifest setting failed ($LASTEXITCODE)" }
-          & $env:DARTPDF_WINGET_EXE install --manifest manifests/d/DartPDF/DartPDF/7.0.0 --source winget --silent --disable-interactivity
+          & $env:DARTPDF_WINGET_EXE install --manifest manifests/d/DartPDF/DartPDF/7.0.0 --silent --disable-interactivity
           if ($LASTEXITCODE -ne 0) { throw "Manifest installation failed ($LASTEXITCODE)" }
 
       - name: Verify installed metadata and launch the empty app
