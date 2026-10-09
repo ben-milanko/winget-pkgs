@@ -55,6 +55,9 @@ jobs:
           $actual = (Get-FileHash $installer -Algorithm SHA256).Hash
           if ($actual -ne $expected) { throw "Installer SHA256 mismatch: $actual" }
           "Official installer SHA256: $actual"
+          $signature = Get-AuthenticodeSignature -LiteralPath $installer
+          "Official installer Authenticode status: $($signature.Status)"
+          if ($signature.SignerCertificate) { "Signer: $($signature.SignerCertificate.Subject)" }
 
       - name: Install the local manifest with bounded diagnostics
         run: |
@@ -66,7 +69,7 @@ jobs:
           $stderrPath = Join-Path $env:RUNNER_TEMP 'dartpdf-winget-stderr.txt'
           $installArgs = @('install', '--manifest', "`"$manifestPath`"", '--silent', '--disable-interactivity', '--verbose-logs')
           $installProcess = Start-Process $env:DARTPDF_WINGET_EXE -ArgumentList $installArgs -PassThru -NoNewWindow -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
-          $completed = $installProcess.WaitForExit(240000)
+          $completed = $installProcess.WaitForExit(120000)
           $installProcess.Refresh()
           foreach ($logPath in @($stdoutPath, $stderrPath)) {
             if (Test-Path -LiteralPath $logPath) {
@@ -75,11 +78,11 @@ jobs:
             }
           }
           if (-not $completed) {
-            'WinGet exceeded the four-minute installation bound. Capturing scoped processes before ending only its disposable VM process tree.'
-            Get-CimInstance Win32_Process | Where-Object { $_.Name -match '(?i)winget|dartpdf|appinstaller' } | Select-Object Name, ProcessId, ParentProcessId, ExecutablePath, CommandLine | Format-List
-            Get-Process | Where-Object { $_.ProcessName -match '(?i)winget|dartpdf|appinstaller' } | Select-Object ProcessName, Id, Responding, MainWindowTitle | Format-Table -AutoSize
+            'WinGet exceeded the two-minute diagnostic bound. Capturing scoped processes before ending only its disposable VM process tree.'
+            Get-CimInstance Win32_Process | Where-Object { $_.Name -match '(?i)winget|dartpdf|appinstaller|smartscreen|consent' } | Select-Object Name, ProcessId, ParentProcessId, ExecutablePath, CommandLine | Format-List
+            Get-Process | Where-Object { $_.ProcessName -match '(?i)winget|dartpdf|appinstaller|smartscreen|consent' } | Select-Object ProcessName, Id, Responding, MainWindowTitle | Format-Table -AutoSize
             & taskkill.exe /PID $installProcess.Id /T /F
-            throw 'WinGet install did not complete within four minutes; behavior gate failed'
+            throw 'WinGet install did not complete within two minutes; behavior gate failed'
           }
           if ($installProcess.ExitCode -ne 0) { throw "Manifest installation failed ($($installProcess.ExitCode))" }
 
@@ -103,6 +106,22 @@ jobs:
           if (Test-Path -LiteralPath $installed) {
             Get-ChildItem -LiteralPath $installed -File | Select-Object Name, Length | Format-Table -AutoSize
           } else { 'No DartPDF program folder exists in the runner account' }
+          $downloadedPath = Join-Path $env:TEMP 'WinGet\DartPDF.DartPDF.7.0.0\dartpdf-windows-installer.exe'
+          if (Test-Path -LiteralPath $downloadedPath) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $downloadedPath
+            "WinGet downloaded installer Authenticode status: $($signature.Status)"
+            Get-Content -LiteralPath $downloadedPath -Stream Zone.Identifier -ErrorAction SilentlyContinue | Where-Object { $_ -match '^ZoneId=' }
+          }
+          $securityLogs = @('Microsoft-Windows-SmartScreen/Debug', 'Microsoft-Windows-CodeIntegrity/Operational', 'Microsoft-Windows-AppLocker/EXE and DLL', 'Microsoft-Windows-Windows Defender/Operational')
+          foreach ($logName in $securityLogs) {
+            $logInfo = Get-WinEvent -ListLog $logName -ErrorAction SilentlyContinue
+            if (-not $logInfo) { "Security log unavailable: $logName"; continue }
+            "Security log $logName enabled=$($logInfo.IsEnabled) records=$($logInfo.RecordCount)"
+            if (-not $logInfo.IsEnabled) { continue }
+            try {
+              Get-WinEvent -FilterHashtable @{LogName=$logName; StartTime=([DateTime]::UtcNow).AddMinutes(-5)} -MaxEvents 10 -ErrorAction Stop | Select-Object TimeCreated, Id, LevelDisplayName, Message | Format-List
+            } catch { "No readable recent security events from $logName" }
+          }
 
       - name: Verify installed metadata and launch the empty app
         run: |
