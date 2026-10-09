@@ -1,4 +1,4 @@
-name: DartPDF Windows package validation
+name: DartPDF Microsoft Store source lookup
 
 on:
   workflow_dispatch:
@@ -7,160 +7,46 @@ permissions:
   contents: read
 
 jobs:
-  validate:
+  lookup:
     runs-on: windows-2025
-    timeout-minutes: 20
+    timeout-minutes: 5
     defaults:
       run:
         shell: powershell
     steps:
-      - name: Check out only the DartPDF package
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-          sparse-checkout: manifests/d/DartPDF/DartPDF/7.0.0
-
-      - name: Locate or bootstrap the official WinGet client
+      - name: Query the existing Store source without accepting agreements
         run: |
           $ErrorActionPreference = 'Stop'
           $client = Get-Command winget.exe -ErrorAction SilentlyContinue
           if (-not $client) {
-            Install-PackageProvider -Name NuGet -Force | Out-Null
-            Install-Module -Name Microsoft.WinGet.Client -Force -Repository PSGallery -Scope CurrentUser | Out-Null
-            Import-Module Microsoft.WinGet.Client
-            Repair-WinGetPackageManager -AllUsers
-            $client = Get-Command winget.exe -ErrorAction SilentlyContinue
+            $appInstaller = Get-AppxPackage -Name Microsoft.DesktopAppInstaller | Select-Object -First 1
+            if ($appInstaller) {
+              $candidate = Join-Path $appInstaller.InstallLocation 'winget.exe'
+              if (Test-Path -LiteralPath $candidate) { $client = Get-Item -LiteralPath $candidate }
+            }
           }
-          if (-not $client) { throw 'WinGet is not available after bootstrap' }
-          "DARTPDF_WINGET_EXE=$($client.Source)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          & $client.Source --version
-          if ($LASTEXITCODE -ne 0) { throw "WinGet version check failed ($LASTEXITCODE)" }
-          $verifiedVersion = (& $client.Source --version).Trim().TrimStart('v')
-          if ([version]$verifiedVersion -lt [version]'1.10.0') { throw "WinGet client remains too old: $verifiedVersion" }
-
-      - name: Validate the three-file manifest with WinGet
-        run: |
-          & $env:DARTPDF_WINGET_EXE validate --manifest manifests/d/DartPDF/DartPDF/7.0.0
-          if ($LASTEXITCODE -ne 0) { throw "Manifest validation failed ($LASTEXITCODE)" }
-
-      - name: Verify the official installer bytes before testing
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $manifest = Get-Content manifests/d/DartPDF/DartPDF/7.0.0/DartPDF.DartPDF.installer.yaml -Raw
-          $url = [regex]::Match($manifest, '(?m)^\s*InstallerUrl:\s*(https[^\r\n]+)').Groups[1].Value.Trim()
-          $expected = [regex]::Match($manifest, '(?m)^\s*InstallerSha256:\s*([A-Fa-f0-9]{64})').Groups[1].Value
-          if (-not $url -or $expected.Length -ne 64) { throw 'Installer URL or hash missing' }
-          $installer = Join-Path $env:RUNNER_TEMP 'dartpdf-windows-installer.exe'
-          Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $installer
-          $actual = (Get-FileHash $installer -Algorithm SHA256).Hash
-          if ($actual -ne $expected) { throw "Installer SHA256 mismatch: $actual" }
-          "Official installer SHA256: $actual"
-          $signature = Get-AuthenticodeSignature -LiteralPath $installer
-          "Official installer Authenticode status: $($signature.Status)"
-          if ($signature.SignerCertificate) { "Signer: $($signature.SignerCertificate.Subject)" }
-
-      - name: Install the local manifest with bounded diagnostics
-        run: |
-          $ErrorActionPreference = 'Stop'
-          & $env:DARTPDF_WINGET_EXE settings --enable LocalManifestFiles
-          if ($LASTEXITCODE -ne 0) { throw "Local manifest setting failed ($LASTEXITCODE)" }
-          $manifestPath = (Resolve-Path 'manifests/d/DartPDF/DartPDF/7.0.0').Path
-          $stdoutPath = Join-Path $env:RUNNER_TEMP 'dartpdf-winget-stdout.txt'
-          $stderrPath = Join-Path $env:RUNNER_TEMP 'dartpdf-winget-stderr.txt'
-          $installArgs = @('install', '--manifest', "`"$manifestPath`"", '--silent', '--disable-interactivity', '--verbose-logs')
-          $installProcess = Start-Process $env:DARTPDF_WINGET_EXE -ArgumentList $installArgs -PassThru -NoNewWindow -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
-          $completed = $installProcess.WaitForExit(120000)
-          $installProcess.Refresh()
-          foreach ($logPath in @($stdoutPath, $stderrPath)) {
-            if (Test-Path -LiteralPath $logPath) {
-              "Captured $([IO.Path]::GetFileName($logPath))"
-              Get-Content -LiteralPath $logPath | Where-Object { $_ -match '[A-Za-z]{3}' -and $_ -notmatch 'Authorization|Bearer|Cookie|https?://\S*\?' } | Select-Object -Last 40
+          if (-not $client) { throw 'Existing WinGet client unavailable; no installation or registration attempted' }
+          $wingetPath = if ($client.Source) { $client.Source } else { $client.FullName }
+          & $wingetPath --version
+          if ($LASTEXITCODE -ne 0) { throw "Existing client version query failed ($LASTEXITCODE)" }
+          & $wingetPath source list --name msstore
+          if ($LASTEXITCODE -ne 0) { throw "Existing Store source metadata query failed ($LASTEXITCODE)" }
+          $stdout = Join-Path $env:RUNNER_TEMP 'dartpdf-msstore-show.txt'
+          $stderr = Join-Path $env:RUNNER_TEMP 'dartpdf-msstore-error.txt'
+          $lookup = Start-Process -FilePath $wingetPath -ArgumentList @('show', '--id', '9N071VSV6RGK', '--source', 'msstore', '--disable-interactivity') -PassThru -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          $completed = $lookup.WaitForExit(90000)
+          $lookup.Refresh()
+          foreach ($file in @($stdout,$stderr)) {
+            if (Test-Path -LiteralPath $file) {
+              Get-Content -LiteralPath $file | Where-Object { $_ -match '[A-Za-z0-9]{3}' -and $_ -notmatch 'Authorization|Bearer|Cookie|https?://\S*\?' }
             }
           }
           if (-not $completed) {
-            'WinGet exceeded the two-minute diagnostic bound. Capturing scoped processes before ending only its disposable VM process tree.'
-            Get-CimInstance Win32_Process | Where-Object { $_.Name -match '(?i)winget|dartpdf|appinstaller|smartscreen|consent' } | Select-Object Name, ProcessId, ParentProcessId, ExecutablePath, CommandLine | Format-List
-            Get-Process | Where-Object { $_.ProcessName -match '(?i)winget|dartpdf|appinstaller|smartscreen|consent' } | Select-Object ProcessName, Id, Responding, MainWindowTitle | Format-Table -AutoSize
-            & taskkill.exe /PID $installProcess.Id /T /F
-            throw 'WinGet install did not complete within two minutes; behavior gate failed'
+            & taskkill.exe /PID $lookup.Id /T /F
+            throw 'Read-only lookup exceeded 90 seconds; only its disposable VM process tree ended'
           }
-          if ($installProcess.ExitCode -ne 0) { throw "Manifest installation failed ($($installProcess.ExitCode))" }
-
-      - name: Read installation diagnostics without changing security or agreements
-        if: always()
-        run: |
-          & $env:DARTPDF_WINGET_EXE --info
-          $diagDir = Join-Path $env:LOCALAPPDATA 'Packages\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe\LocalState\DiagOutputDir'
-          if (Test-Path -LiteralPath $diagDir) {
-            $logs = Get-ChildItem -LiteralPath $diagDir -Filter 'WinGet-*.log' -File | Sort-Object LastWriteTime -Descending | Select-Object -First 2
-            foreach ($log in $logs) {
-              "Diagnostic log: $($log.Name)"
-              Get-Content -LiteralPath $log.FullName | Where-Object { $_ -match 'Installer|install|Executing|Execute|ShellExecute|Waiting|Error|Exception|Failed|Cancelled' -and $_ -notmatch 'https?://|Authorization|Bearer|Cookie|Token|headers' } | Select-Object -Last 80
-            }
-          }
-          $arpPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\DartPDF'
-          if (Test-Path $arpPath) {
-            Get-ItemProperty $arpPath | Select-Object DisplayName, DisplayVersion, Publisher, InstallLocation | Format-List
-          } else { 'No DartPDF ARP entry exists in the runner account' }
-          $installed = Join-Path $env:LOCALAPPDATA 'Programs\DartPDF'
-          if (Test-Path -LiteralPath $installed) {
-            Get-ChildItem -LiteralPath $installed -File | Select-Object Name, Length | Format-Table -AutoSize
-          } else { 'No DartPDF program folder exists in the runner account' }
-          $downloadedPath = Join-Path $env:TEMP 'WinGet\DartPDF.DartPDF.7.0.0\dartpdf-windows-installer.exe'
-          if (Test-Path -LiteralPath $downloadedPath) {
-            $signature = Get-AuthenticodeSignature -LiteralPath $downloadedPath
-            "WinGet downloaded installer Authenticode status: $($signature.Status)"
-            Get-Content -LiteralPath $downloadedPath -Stream Zone.Identifier -ErrorAction SilentlyContinue | Where-Object { $_ -match '^ZoneId=' }
-          }
-          $securityLogs = @('Microsoft-Windows-SmartScreen/Debug', 'Microsoft-Windows-CodeIntegrity/Operational', 'Microsoft-Windows-AppLocker/EXE and DLL', 'Microsoft-Windows-Windows Defender/Operational')
-          foreach ($logName in $securityLogs) {
-            $logInfo = Get-WinEvent -ListLog $logName -ErrorAction SilentlyContinue
-            if (-not $logInfo) { "Security log unavailable: $logName"; continue }
-            "Security log $logName enabled=$($logInfo.IsEnabled) records=$($logInfo.RecordCount)"
-            if (-not $logInfo.IsEnabled) { continue }
-            try {
-              Get-WinEvent -FilterHashtable @{LogName=$logName; StartTime=([DateTime]::UtcNow).AddMinutes(-5)} -MaxEvents 10 -ErrorAction Stop | Select-Object TimeCreated, Id, LevelDisplayName, Message | Format-List
-            } catch { "No readable recent security events from $logName" }
-          }
-
-      - name: Verify installed metadata and launch the empty app
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $installed = Join-Path $env:LOCALAPPDATA 'Programs\DartPDF'
-          $arp = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\DartPDF'
-          if ($arp.DisplayName -ne 'DartPDF' -or $arp.DisplayVersion -ne '7.0.0' -or $arp.Publisher -ne 'DartPDF') {
-            throw "Unexpected installed metadata: $($arp.DisplayName) / $($arp.DisplayVersion) / $($arp.Publisher)"
-          }
-          if ($arp.InstallLocation -ne $installed) { throw 'Unexpected installation location' }
-          foreach ($name in @('dart_pdf_editor_app.exe', 'dartpdf.exe', 'msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll', 'Uninstall.exe')) {
-            if (-not (Test-Path (Join-Path $installed $name))) { throw "Missing installed file: $name" }
-          }
-          "ARP verified: $($arp.DisplayName) / $($arp.DisplayVersion) / $($arp.Publisher)"
-          & (Join-Path $installed 'dartpdf.exe') --version
-          if ($LASTEXITCODE -ne 0) { throw "Bundled CLI smoke test failed ($LASTEXITCODE)" }
-          $app = Start-Process (Join-Path $installed 'dart_pdf_editor_app.exe') -PassThru
-          try {
-            Start-Sleep -Seconds 12
-            $app.Refresh()
-            if ($app.HasExited) { throw "GUI exited during empty launch ($($app.ExitCode))" }
-            'GUI survived the 12-second empty launch'
-          } finally {
-            $app.Refresh()
-            if (-not $app.HasExited) {
-              $null = $app.CloseMainWindow()
-              if (-not $app.WaitForExit(5000)) { Stop-Process -Id $app.Id -Force }
-            }
-          }
-
-      - name: Verify the publisher uninstaller removes only the test installation
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $installed = Join-Path $env:LOCALAPPDATA 'Programs\DartPDF'
-          $uninstaller = Join-Path $installed 'Uninstall.exe'
-          if (-not (Test-Path $uninstaller)) { throw 'Expected test uninstaller missing' }
-          $process = Start-Process $uninstaller -ArgumentList '/S' -Wait -PassThru
-          if ($process.ExitCode -ne 0) { throw "Uninstall failed ($($process.ExitCode))" }
-          for ($attempt = 0; $attempt -lt 20 -and (Test-Path $installed); $attempt++) { Start-Sleep -Seconds 1 }
-          if (Test-Path $installed) { throw 'Test program directory remains after uninstall' }
-          if (Test-Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\DartPDF') { throw 'Test ARP entry remains' }
-          'Publisher uninstall removed the test program directory and ARP entry'
+          "Store lookup exit code: $($lookup.ExitCode)"
+          if ($lookup.ExitCode -ne 0) { throw 'Store source lookup did not establish DartPDF availability; no agreement acceptance or retry performed' }
+          $result = Get-Content -LiteralPath $stdout -Raw
+          if ($result -notmatch '9N071VSV6RGK' -or $result -notmatch 'DartPDF') { throw 'Exact product identity missing from the successful lookup' }
+          'Exact DartPDF Microsoft Store source metadata found. No download, install, launch, source changes or terms acceptance performed.'
