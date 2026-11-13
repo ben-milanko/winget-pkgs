@@ -27,6 +27,7 @@ jobs:
           $env:SCOOP = Join-Path $env:GITHUB_WORKSPACE 'scoop-root'
           $env:SCOOP_GLOBAL = Join-Path $env:RUNNER_TEMP 'scoop-global'
           $scoop = Join-Path $env:SCOOP 'apps/scoop/current/bin/scoop.ps1'
+          New-Item -ItemType Directory -Path (Join-Path $env:SCOOP 'shims') -Force | Out-Null
           & $scoop install (Join-Path $env:GITHUB_WORKSPACE 'candidate/dartpdf.json')
           if ($LASTEXITCODE -ne 0) { throw 'Scoop installation failed' }
           $dir = Join-Path $env:SCOOP 'apps/dartpdf/current'
