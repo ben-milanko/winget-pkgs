@@ -20,6 +20,13 @@ jobs:
           ref: e6aa3b366bdee8ed138c1e0f7b85192ebdd35d0f
           persist-credentials: false
           path: scoop-root/apps/scoop/current
+      - name: Checkout pinned normal Scoop main bucket
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ScoopInstaller/Main
+          ref: 37f30ebc3ccacf6688744e5100b09bbb45d2f170
+          persist-credentials: false
+          path: scoop-root/buckets/main
       - name: Install, inspect, launch and uninstall the portable app
         shell: pwsh
         run: |
@@ -28,6 +35,10 @@ jobs:
           $env:SCOOP_GLOBAL = Join-Path $env:RUNNER_TEMP 'scoop-global'
           $scoop = Join-Path $env:SCOOP 'apps/scoop/current/bin/scoop.ps1'
           New-Item -ItemType Directory -Path (Join-Path $env:SCOOP 'shims') -Force | Out-Null
+          $env:XDG_CONFIG_HOME = Join-Path $env:RUNNER_TEMP 'scoop-test-config'
+          $configDir = Join-Path $env:XDG_CONFIG_HOME 'scoop'
+          New-Item -ItemType Directory -Path $configDir -Force | Out-Null
+          @{root_path=$env:SCOOP; last_update=[DateTime]::Now.ToString('o')} | ConvertTo-Json | Set-Content (Join-Path $configDir 'config.json') -Encoding utf8
           & $scoop install (Join-Path $env:GITHUB_WORKSPACE 'candidate/dartpdf.json')
           if ($LASTEXITCODE -ne 0) { throw 'Scoop installation failed' }
           $dir = Join-Path $env:SCOOP 'apps/dartpdf/current'
