@@ -1,0 +1,37 @@
+{
+    "version": "16.0.0",
+    "description": "PDF editor for local annotation, form filling, signatures and page editing.",
+    "homepage": "https://dart-pdf.com",
+    "license": "Apache-2.0",
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/ben-milanko/dart-pdf/releases/download/app-v16.0.0/dartpdf-windows-x64.zip",
+            "hash": "b3509dcddc79a19a31da34e0e1a29b4498cb13fe4fba37caa4f53eb7ba649ef9"
+        }
+    },
+    "bin": [
+        "dartpdf.exe",
+        [
+            "dart_pdf_editor_app.exe",
+            "dartpdf-editor"
+        ]
+    ],
+    "shortcuts": [
+        [
+            "dart_pdf_editor_app.exe",
+            "DartPDF"
+        ]
+    ],
+    "checkver": {
+        "url": "https://api.github.com/repos/ben-milanko/dart-pdf/releases/latest",
+        "jsonpath": "$.tag_name",
+        "regex": "app-v([\\d.]+)"
+    },
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/ben-milanko/dart-pdf/releases/download/app-v$version/dartpdf-windows-x64.zip"
+            }
+        }
+    }
+}
