@@ -43,8 +43,15 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Scoop installation failed' }
           $dir = Join-Path $env:SCOOP 'apps/dartpdf/current'
           if (!(Test-Path "$dir/dart_pdf_editor_app.exe") -or !(Test-Path "$dir/dartpdf.exe")) { throw 'Installed binaries missing' }
-          $help = & "$dir/dartpdf.exe" --help
-          if ($LASTEXITCODE -ne 0 -or !($help -match 'inspect')) { throw 'Bundled CLI did not start' }
+          $sample = Join-Path $env:RUNNER_TEMP 'first-pdf-practice.pdf'
+          Invoke-WebRequest 'https://github.com/ben-milanko/dart-pdf/releases/download/app-v16.0.0/first-pdf-practice.pdf' -OutFile $sample
+          if ((Get-FileHash $sample -Algorithm SHA256).Hash.ToLowerInvariant() -ne 'b322bc0398ca0b5a8d4ebb63ce246a6846130d1f82a62b69e7343eb3e86f8e67') { throw 'Practice PDF hash mismatch' }
+          $report = & "$dir/dartpdf.exe" inspect $sample --json
+          $cliExit = $LASTEXITCODE
+          Write-Output ('CLI inspect exit: ' + $cliExit)
+          if ($cliExit -ne 0) { throw 'Bundled CLI inspect failed' }
+          $parsed = ($report -join "`n") | ConvertFrom-Json
+          if ($parsed.pageCount -ne 1) { throw 'CLI did not inspect the one-page PDF' }
           $shortcut = Join-Path $env:APPDATA 'Microsoft/Windows/Start Menu/Programs/Scoop Apps/DartPDF.lnk'
           if (!(Test-Path $shortcut)) { throw 'App shortcut missing' }
           $app = Start-Process "$dir/dart_pdf_editor_app.exe" -PassThru
